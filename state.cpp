@@ -2,66 +2,75 @@
 #include "liar.h"
 
 State::State(){
-    currPlayer = 1;
-    for(int i=0; i<deckSize; i++){
-        for(int j=0; j<deckCount; j++){
-            bets[i][j] = false;
-        }
+    currPlayer = 0;
+    for(int i=0; i<TIME_HORIZON; i++){
+        event_seq[i] = -1;
     }
     endState = false;
+    for(int i=0; i<NUM_AGENT; i++){
+        committed_chips[i] = 1;
+        folded[i] = false;
+    }
+    currTime = 0;
 }
 
 int State::topBet(){
-    int high_val = -1;
-    int high_count = -1;
-    for(int i=0; i<deckCount; i++){
-        for(int j=0; j<deckSize; j++){
-            if(bets[j][i]){
-                high_val = j;
-                high_count = i;
-            }
+    for(int i=currTime-1; i>=0; i--){
+        if(event_seq[i] != 0){
+            return event_seq[i];
         }
     }
-    return high_count * deckSize + high_val;
+    return 1;
 }
 
 bool State::validAction(int action){
     int top = topBet();
-    int high_count = top / deckSize;
-    int high_val = top % deckSize;
-    if(action == CALL){
-        return high_val != -1;
+    if(action == FOLD){
+        return committed_chips[currPlayer] < top;
     }
-    int act_val = action / deckCount;
-    int act_count = action % deckCount;
-    if(act_count == high_count){
-        return act_val > high_val;
-    }
-    return act_count > high_count;
+    return action == top || action >= top * 2 || action == maxBet;
 }
 
 void State::makeAction(int action){
-    if(action == CALL){
-        endState = true;
+    event_seq[currTime] = action;
+    if(action == 0){
+        folded[currPlayer] = true;
+    }
+    else{
+        committed_chips[currPlayer] = action;
+    }
+    currTime ++;
+    // check for endState
+    endState = true;
+    for(int i=0; i<NUM_AGENT; i++){
+        if(!folded[i] && committed_chips[i] != action){
+            endState = false;
+        }
+    }
+    if(action == 1 && currPlayer != NUM_AGENT - 1){ // edge case where no bets are made at the beginning
+        endState = false;
+    }
+    if(endState){
         return;
     }
-    int act_val = action / deckCount;
-    int act_count = action % deckCount;
-    bets[act_val][act_count] = true;
-    currPlayer = 3 - currPlayer;
-    if(act_val == deckSize - 1 && act_count == deckCount - 1){
-        endState = true;
+    for(int player = currPlayer + 1; player < currPlayer + NUM_AGENT; player++){
+        if(!folded[player % NUM_AGENT]){
+            currPlayer = player % NUM_AGENT;
+            return;
+        }
     }
+    assert(false);
 }
 
 string State::toString(){
-    string s = "EndState: " + to_string(endState) + '\n';
-    for(int i=0; i<deckSize; i++){
-        for(int j=0; j<deckCount; j++){
-            s += to_string(bets[i][j]);
+    string s = "Events:\n";
+    for(int i=0; i<currTime; i++){
+        s += to_string(event_seq[i]) + ' ';
+        if(i % 3 == 2){
+            s += '\n';
         }
-        s += '\n';
     }
+    s += '\n';
     return s;
 }
 
@@ -90,22 +99,28 @@ unordered_set<State, StateHash> all_states(){
     return states;
 }
 
-double State::reward(Type t1, Type t2){
-    int top = topBet();
-    int high_count = top / deckSize;
-    int high_val = top % deckSize;
-
-    int winner;
-    if(high_count > t1.type[high_val] + t2.type[high_val]){
-        winner = currPlayer;
+void State::getReward(){
+    int maxVal = 0;
+    int winner = -1;
+    for(int i=0; i<NUM_AGENT; i++){
+        if(!folded[i]){
+            if(maxVal < revealed_types[i]){
+                maxVal = revealed_types[i];
+                winner = i;
+            }
+        }
     }
-    else{
-        winner = 3 - currPlayer;
+    assert(winner != -1);
+    int pot = 0;
+    for(int i=0; i<NUM_AGENT; i++){
+        pot += committed_chips[i];
     }
-    if(winner == 1){
-        return 1;
+    for(int i=0; i<NUM_AGENT; i++){
+        reward[i] = -committed_chips[i];
+        if(i == winner){
+            reward[i] += pot;
+        }
     }
-    return -1;
 }
 
 // Iterating through states:

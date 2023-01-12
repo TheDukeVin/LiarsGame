@@ -20,69 +20,127 @@ using std::chrono::milliseconds;
 using std::chrono::seconds;
 using std::chrono::system_clock;
 
-// Liar's dice
+// Dummy's poker
 
-const int deckSize = 5;
-const int deckCount = 3;
-const int handSize = 4;
-const int TIME_HORIZON = deckSize * deckCount + 1;
-const int NUM_ACTIONS = deckSize * deckCount + 1;
+/*
+3-player game. Each player gets one card.
+Each player puts 1 chip in the pot. 
+Players can call/check or raise the pot (by at least double) or fold their card. 
+Player with highest card wins the pot.
+*/
 
-const int CALL = deckSize * deckCount;
+const int NUM_AGENT = 3;
+
+const int deckSize = 6;
+const int maxBet = 10;
+// TIME_HORIZON = maximum game length.
+// Here, TIME_HORIZON = NUM_AGENT * (1 + ceil log2(maxBet))
+const int TIME_HORIZON = 15;
+
+/*
+Actions:
+0 = fold
+1 = call
+k>1 = raise to k
+*/
+const int NUM_ACTIONS = maxBet + 1;
+
+// large prime for hashing
+const int M = 1000000019;
 
 long getTime();
 
 class Type{
 public:
-    int type[deckSize];
+    int cardVal;
 
     Type(){}
-    Type(int* t);
+    Type(int val);
     void const print() const;
 
     friend bool operator == (const Type& t, const Type& s){
-        for(int i=0; i<deckSize; i++){
-            if(t.type[i] != s.type[i]) return false;
-        }
-        return true;
+        return t.cardVal == s.cardVal;
     }
 };
 
 class TypeHash{
 public:
     size_t operator()(const Type& t) const {
-        int M = 1000000019;
-        int val = 0;
-        for(int i=0; i<deckSize; i++){
-            val = (val * 10 + t.type[i]) % M;
-        }
-        return hash<int>{}(val);
+        return hash<int>{}(t.cardVal);
     }
 };
 
+// a class to describe the state of opponent's types.
+class OppType{
+public:
+    Type types[NUM_AGENT];
+    int playerID;
+
+    friend bool operator == (const OppType& t, OppType& s){
+        assert(t.playerID == s.playerID);
+        for(int i=0; i<NUM_AGENT; i++){
+            if(i == playerID) continue;
+            if(!(t.types[i] == s.types[i])){
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+class OppHash{
+    size_t operator()(const OppType& t) const {
+        long val = 0;
+        for(int i=0; i<NUM_AGENT; i++){
+            if(i == playerID) continue;
+            val = (val * 54321 + TypeHash(types[i])) % M;
+        }
+        return val;
+    }
+    
+}
+
 typedef unordered_map<Type, double, TypeHash> type_dist;
+typedef unordered_set<Type, TypeHash> type_set;
+typedef unordered_map<OppType, double, OppHash> opp_type_dist;
+typedef unordered_set<OppType, OppHash> opp_type_set;
 
 int choose(int n, int k);
 int fact(int n);
 
-unordered_set<Type, TypeHash> all_types();
+type_set all_types();
 type_dist initial_distribution();
-type_dist opposing_distribution(const int type[]);
+opp_type_set all_opp_types();
+opp_type_dist opposing_distribution(Type& t, int playerID);
 
 class State{
+private:
+    int committed_chips[NUM_AGENT];
+    bool folded[NUM_AGENT];
+    int currTime;
+
+    const int FOLD = 0;
 public:
     // State info
-    int currPlayer; // 1 = maximizing, 2 = minimizing
-    //bet[i][j] is betting there are at least (j+1) cards of value i
-    bool bets[deckSize][deckCount];
-    bool endState; // at the end state, currPlayer is the player who calls.
+    int currPlayer; // 0, 1, 2.
+
+    /*
+    Events:
+    Positive number = bet of that size (starts at 1).
+    0 = fold
+    -1 = not yet set.
+    */
+    int event_seq[TIME_HORIZON];
+    bool endState;
 
     State();
     int topBet();
     bool validAction(int action);
     void makeAction(int action);
-    // Note: this reward function is symmetric. Test cases when it is not symmetric.
-    double reward(Type t1, Type t2);
+
+    double reward[NUM_AGENT];
+    Type revealed_types[NUM_AGENT];
+    void getReward(); // reads revealed_types, modifies reward array to represent rewards.
 
     string toString();
 
@@ -103,7 +161,6 @@ class StateHash{
 public:
     size_t operator()(const State& s) const {
         // assert(!s.endState);
-        int M = 1000000019;
         // int val = 0;
         int val = s.endState;
         for(int i=0; i<deckSize; i++){
@@ -128,25 +185,37 @@ public:
 };
 
 class LiarsGame{
+private:
+    int currPlayer;
 public:
+    // store policies of all players
     unordered_map<State, unordered_map<Type, Action, TypeHash>, StateHash> policy;
-    // visitation[c][s][t] = probability of reaching state s given
-    // player 3-c has type t, player 3-c follows p
-    // player c follows path to s
-    unordered_map<State, unordered_map<Type, double, TypeHash>, StateHash> visitation[3];
-    // value[c][s][t] = value of state s given
-    // player 3-c has bayesian type, player 3-c follows p
-    // player c has type t, player c plays best response against p
-    unordered_map<State, unordered_map<Type, double, TypeHash>, StateHash> value[3];
+    // visitation[i][s][t] = probability of reaching state s given
+    // player -i has type t, player -i follows p
+    // player i follows path to s
+    unordered_map<State, unordered_map<OppType, double, OppHash>, StateHash> visitation[NUM_AGENT];
+    // value[s][t] = value of state s given
+    // i = currPlayer
+    // player -i has bayesian type, player -i follows p
+    // player i has type t, player i plays best response against p
+    unordered_map<State, unordered_map<Type, double, TypeHash>, StateHash> value;
 
     LiarsGame();
     void getVisitation();
+    // calculate value and find best response, update policy
     void updatePolicy();
+
+    //combine above two functions
+    void improvePolicy(int playerID);
 
 private:
     void updateRecurse(State& s);
     void calculateEndValue(State& s);
-    type_dist bayesian_type(State& s, Type t);
+
+    // at state s given
+    // player i has type t
+    // what is the distribution of opposing types
+    opp_type_dist bayesian_type(State& s, Type t);
 };
 
 #endif

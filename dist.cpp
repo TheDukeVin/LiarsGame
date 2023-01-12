@@ -17,42 +17,10 @@ int fact(int n){
     return prod;
 }
 
-unordered_set<Type, TypeHash> all_types(){
-    unordered_set<Type, TypeHash> types;
-    int reps[deckSize];
-    for(int i=0; i<deckSize; i++){
-        reps[i] = 0;
-    }
-    reps[0] = handSize;
-    while(true){
-        Type t(reps);
-        bool validHand = true;
-        for(int i=0; i<deckSize; i++){
-            if(reps[i] > deckCount){
-                validHand = false;
-            }
-        }
-        if(validHand){
-            types.insert(t);
-        }
-        
-        int firstIndex;
-        for(int i=0; i<deckSize; i++){
-            if(reps[i] != 0){
-                firstIndex = i;
-                break;
-            }
-        }
-        if(firstIndex == deckSize - 1) break;
-        // increment next by 1
-        reps[firstIndex+1] ++;
-        // reset all to 0
-        int sum = 0;
-        for(int i=0; i<=firstIndex; i++){
-            sum += reps[i];
-            reps[i] = 0;
-        }
-        reps[0] = sum-1;
+type_set all_types(){
+    type_set types;
+    for(int i=1; i<=deckSize; i++){
+        types.insert(Type(i));
     }
     return types;
 }
@@ -60,33 +28,39 @@ unordered_set<Type, TypeHash> all_types(){
 type_dist initial_distribution(){
     type_dist dist;
     for(auto t : all_types()){
-        double val = 1;
-        for(int i=0; i<deckSize; i++){
-            val *= choose(deckCount, t.type[i]);
-        }
-        dist[t] = val / choose(deckSize * deckCount, handSize);
+        dist[t] = 1.0 / deckSize;
     }
     return dist;
 }
 
-type_dist opposing_distribution(const int type[]){
-    type_dist dist;
-    for(auto t : all_types()){
-        bool validType = true;
-        for(int i=0; i<deckSize; i++){
-            if(t.type[i] + type[i] > deckCount){
-                validType = false;
+opp_type_set all_opp_types(){
+    opp_type_set opp_types;
+    // 3-player game
+    for(int i=1; i<=deckSize; i++){
+        for(int j=1; j<=deckSize; j++){
+            if(i == j || i == t.cardVal || j == t.cardVal) continue;
+            OppType ot;
+            if(playerID == 0){
+                ot.types[1] = Type(i);
+                ot.types[2] = Type(j);
             }
+            if(playerID == 1){
+                ot.types[0] = Type(i);
+                ot.types[2] = Type(j);
+            }
+            if(playerID == 2){
+                ot.types[0] = Type(i);
+                ot.types[1] = Type(j);
+            }
+            opp_types.insert(ot);
         }
-        if(!validType){
-            dist[t] = 0;
-            continue;
-        }
-        double val = 1;
-        for(int i=0; i<deckSize; i++){
-            val *= choose(deckCount - type[i], t.type[i]);
-        }
-        dist[t] = val / choose(deckSize * deckCount - handSize, handSize);
+    }
+}
+
+opp_type_dist opposing_distribution(Type& t, int playerID){
+    opp_type_dist dist;
+    for(auto ot : all_opp_types()){
+        dist[ot] = 1.0 / ((deckSize - 1) * (deckSize - 2));
     }
     return dist;
 }
